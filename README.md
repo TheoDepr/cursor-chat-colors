@@ -1,6 +1,8 @@
 # Cursor Chat Colors
 
-Every Agent chat gets its own color — sidebar, top tabs, and a left accent on the conversation stay in sync so you can switch by color, not by title.
+Every Agent chat gets its own color — top tabs and a left accent on the conversation stay in sync so you can switch by color, not by title.
+
+![Cursor Agent chats with distinct tab and conversation colors](assets/cursor-chat-colors-preview.png)
 
 This is a **hack**: it injects CSS/JS into Cursor’s `workbench.html`. It can break after Cursor updates. Use at your own risk.
 
@@ -35,7 +37,7 @@ After `on` or `reinstall`: **Cmd+Q** and reopen.
 
 - **New chat** → random dark tint (a little hue, not gray; avoids hues already on open/recent chats)
 - **Same chat forever** → locked to that composer id in `localStorage`
-- **Tabs, sidebar, and left accent** → always the same color, including after renames and in split panes
+- **Tabs and left accent** → always the same color, including after renames and in split panes
 
 That’s the whole point: scan the tab bar by color, not by title.
 

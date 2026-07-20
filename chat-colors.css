@@ -38,32 +38,6 @@
   z-index: 20;
 }
 
-/* Each history row — bright accent (same as top tabs) */
-.agent-sidebar-cell[data-chat-colored="true"] {
-  border-left: 3px solid var(--chat-accent) !important;
-  background: color-mix(in srgb, var(--chat-accent) 28%, transparent) !important;
-}
-
-.agent-sidebar-cell[data-chat-colored="true"][data-selected="true"] {
-  background: color-mix(in srgb, var(--chat-accent) 44%, transparent) !important;
-}
-
-.compact-agent-history-react-menu-label[data-chat-colored="true"] {
-  border-left: 3px solid var(--chat-accent) !important;
-  padding-left: 6px !important;
-  background: color-mix(in srgb, var(--chat-accent) 28%, transparent) !important;
-  border-radius: 4px;
-}
-
-.compact-agent-history-react-menu-label[data-chat-colored="true"][data-selected="true"],
-.ui-menu__item[data-chat-colored="true"][data-selected="true"] {
-  background: color-mix(in srgb, var(--chat-accent) 44%, transparent) !important;
-}
-
-.ui-menu__item[data-chat-colored="true"] {
-  border-left: 3px solid var(--chat-accent) !important;
-}
-
 .agent-tab[data-chat-colored="true"],
 .agent-tabs-container [role="tab"][data-chat-colored="true"] {
   border-bottom: 2px solid var(--chat-accent) !important;
