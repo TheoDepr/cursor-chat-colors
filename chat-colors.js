@@ -13,9 +13,10 @@
     // "My chat title": "#36ADA3",
   };
 
-  // Fresh store — do not migrate old fixed-palette assignments
-  const STORE_KEY = "cursor-chat-colors-v8";
-  const LEGACY_KEYS = [];
+  // Fresh title maps — v9 drops corrupted titleToId/byTitle from selection races.
+  // byId (composer-id → color) is the only trusted sticky mapping.
+  const STORE_KEY = "cursor-chat-colors-v9";
+  const LEGACY_KEYS = ["cursor-chat-colors-v8"];
   const RECENT_MAX = 4;
 
   // New chats share these titles until renamed — never sticky-bind color by them
@@ -44,12 +45,13 @@
         const raw = localStorage.getItem(key);
         if (!raw) continue;
         const parsed = JSON.parse(raw);
+        const fromCurrent = key === STORE_KEY;
         return {
+          // Composer id → color survives across versions
           byId: parsed.byId || {},
-          // Drop titleToId from older versions — those bindings were often corrupted
-          // by tab/sidebar selection races. Rebuild safely from trusted pairs only.
-          titleToId: key === STORE_KEY ? parsed.titleToId || {} : {},
-          byTitle: parsed.byTitle || {},
+          // Title maps only from current store — older ones were race-corrupted
+          titleToId: fromCurrent ? parsed.titleToId || {} : {},
+          byTitle: fromCurrent ? parsed.byTitle || {} : {},
           recent: Array.isArray(parsed.recent) ? parsed.recent : [],
         };
       }
@@ -57,6 +59,25 @@
       /* ignore */
     }
     return { byId: {}, titleToId: {}, byTitle: {}, recent: [] };
+  }
+
+  /** True when this title is already owned by a different composer id. */
+  function titleOwnedByOther(t, id) {
+    t = normalizeTitle(t);
+    if (!t || !id) return false;
+    const existing = store.titleToId[t];
+    if (existing && existing !== id) return true;
+    for (const [key, mapped] of Object.entries(store.titleToId)) {
+      if (mapped !== id && titlesMatch(t, key)) return true;
+    }
+    return false;
+  }
+
+  /** Sidebar selection and active tab refer to the same chat (or tab title unknown). */
+  function selectionAgreesWithPane(sidebarTitle, tabTitle) {
+    if (!sidebarTitle) return false;
+    if (!tabTitle) return true;
+    return titlesMatch(sidebarTitle, tabTitle);
   }
 
   function scheduleSave() {
@@ -74,9 +95,11 @@
   function usedColors() {
     const used = new Set();
     if (lastPaneColor) used.add(lastPaneColor);
+    for (const c of Object.values(store.byId || {})) if (c) used.add(c);
+    for (const c of Object.values(store.byTitle || {})) if (c) used.add(c);
     try {
       collectTopChatTabs().forEach((tab) => {
-        const c = tab.style.getPropertyValue("--chat-accent") || sticky.get(tab);
+        const c = sticky.get(tab) || tab.style.getPropertyValue("--chat-accent");
         if (c) used.add(c);
       });
     } catch {
@@ -133,8 +156,8 @@
   function brightenForTab(color) {
     const hsl = hexToHsl(color);
     if (!hsl) return color;
-    const s = Math.min(64, Math.max(34, hsl.s + 16));
-    const l = Math.max(44, Math.min(58, hsl.l + 30));
+    const s = Math.min(86, Math.max(62, hsl.s + 36));
+    const l = Math.max(52, Math.min(64, hsl.l + 38));
     return hslToHex(hsl.h, s, l);
   }
 
@@ -386,12 +409,13 @@
         }
       }
 
-      if (titleColorCache.has(t)) return titleColorCache.get(t);
+      // Prefer persisted byTitle over session cache (cache was race-poisoned before)
       if (store.byTitle[t]) return store.byTitle[t];
-      for (const [key, color] of titleColorCache) {
+      for (const [key, color] of Object.entries(store.byTitle)) {
         if (titlesMatch(t, key)) return color;
       }
-      for (const [key, color] of Object.entries(store.byTitle)) {
+      if (titleColorCache.has(t)) return titleColorCache.get(t);
+      for (const [key, color] of titleColorCache) {
         if (titlesMatch(t, key)) return color;
       }
       if (OVERRIDES[t]) return OVERRIDES[t];
@@ -481,22 +505,15 @@
   }
 
   /**
-   * Force title caches to follow an id's color so sidebar/tab lookups
-   * cannot drift onto an orphan byTitle hue.
+   * Align title → id color only when this title is allowed to belong to this id.
+   * Never delete byTitle or poison titleColorCache for a title owned by someone else —
+   * that was re-rolling sidebar colors every sync / 4s tick.
    */
   function reconcileTitleToIdColor(t, id, color) {
     t = normalizeTitle(t);
-    if (!t || !color || isPlaceholderTitle(t)) return;
-    titleColorCache.set(t, color);
-    idColorCache.set(id, color);
-    if (store.byTitle[t]) {
-      delete store.byTitle[t];
-      scheduleSave();
-    }
-    bindTitleSafe(t, id, color);
-    // If title is owned by a different id, still keep session cache aligned
-    // so inactive tabs/rows with this title paint the active chat's color
-    // only when titlesMatch — caches alone don't rebind titleToId.
+    if (!t || !id || !color || isPlaceholderTitle(t)) return false;
+    if (titleOwnedByOther(t, id)) return false;
+    return bindTitleSafe(t, id, color);
   }
 
   /**
@@ -507,7 +524,7 @@
   function claimPair(id, title) {
     if (!id) return colorForChat({ title });
     const t = normalizeTitle(title);
-    // Id wins. Never let a stale byTitle hue (teal) override byId (purple).
+    // Id wins. Never let a stale byTitle hue override byId.
     let color = lookupColor({ id });
     if (!color && t && !isPlaceholderTitle(t)) color = lookupColor({ title: t });
     if (!color) {
@@ -605,13 +622,13 @@
     const activeId = activeComposerId();
     const activeTabTitle = getActiveTabTitle();
     const selectedSidebarTitle = getSelectedSidebarTitle();
+    const paneSelectionOk = selectionAgreesWithPane(selectedSidebarTitle, activeTabTitle);
 
     // Trusted pairs only — never bind a stale sidebar title to a new composer id
     if (activeId && activeTabTitle) {
       lastPaneColor = claimPair(activeId, activeTabTitle);
       lastPaneId = activeId;
-    } else if (activeId && selectedSidebarTitle) {
-      // Only if sidebar title agrees with active tab (or no tab title yet)
+    } else if (activeId && selectedSidebarTitle && paneSelectionOk) {
       lastPaneColor = claimPair(activeId, selectedSidebarTitle);
       lastPaneId = activeId;
     } else if (activeId) {
@@ -625,21 +642,24 @@
     function remember(title, color) {
       const t = normalizeTitle(title);
       if (!t || !color || isPlaceholderTitle(t)) return;
+      // Do not overwrite an already-seeded title with a different color
+      if (colorByTitle.has(t) && colorByTitle.get(t) !== color) return;
       colorByTitle.set(t, color);
-      // Also index under any existing fuzzy keys we already have
       for (const key of [...colorByTitle.keys()]) {
-        if (key !== t && titlesMatch(key, t)) colorByTitle.set(key, color);
+        if (key === t || !titlesMatch(key, t)) continue;
+        if (colorByTitle.get(key) && colorByTitle.get(key) !== color) continue;
+        colorByTitle.set(key, color);
       }
     }
 
     function colorForTitle(title) {
       const t = normalizeTitle(title);
       if (!t || isPlaceholderTitle(t)) return null;
-      // Active chat surfaces must share lastPaneColor even if caption ≠ tab label.
+      // Active chat surfaces share lastPaneColor only when this title is the pane chat.
       if (
         lastPaneColor &&
-        ((selectedSidebarTitle && titlesMatch(t, selectedSidebarTitle)) ||
-          (activeTabTitle && titlesMatch(t, activeTabTitle)))
+        ((activeTabTitle && titlesMatch(t, activeTabTitle)) ||
+          (paneSelectionOk && selectedSidebarTitle && titlesMatch(t, selectedSidebarTitle)))
       ) {
         remember(t, lastPaneColor);
         return lastPaneColor;
@@ -653,14 +673,12 @@
       return color;
     }
 
-    // Seed map from active chat — selected sidebar ALWAYS follows pane color.
-    // Do not require titlesMatch; extraction can differ slightly and that used
-    // to leave the left row on a stale byTitle hue while the tab stayed on byId.
+    // Seed from active chat — only titles that actually belong to this pane.
     if (lastPaneColor) {
       if (activeTabTitle) remember(activeTabTitle, lastPaneColor);
-      if (selectedSidebarTitle) remember(selectedSidebarTitle, lastPaneColor);
+      if (paneSelectionOk && selectedSidebarTitle) remember(selectedSidebarTitle, lastPaneColor);
       if (activeId && activeTabTitle) reconcileTitleToIdColor(activeTabTitle, activeId, lastPaneColor);
-      if (activeId && selectedSidebarTitle) {
+      if (activeId && paneSelectionOk && selectedSidebarTitle) {
         reconcileTitleToIdColor(selectedSidebarTitle, activeId, lastPaneColor);
       }
     }
@@ -712,7 +730,7 @@
     }
 
     // Paint sidebar from the SAME map.
-    // Selected row = active chat → always lastPaneColor (never a title-only lookup).
+    // Selected row follows pane color only when selection matches the active tab.
     document.querySelectorAll(".agent-sidebar-cell").forEach((cell) => {
       if (isSidebarChromeCell(cell)) {
         clearPaint(cell);
@@ -721,7 +739,7 @@
       const title = textOf(cell.querySelector(".agent-sidebar-cell-caption"));
       const selected = cell.getAttribute("data-selected") === "true";
       let color = null;
-      if (selected && lastPaneColor) {
+      if (selected && lastPaneColor && paneSelectionOk) {
         color = lastPaneColor;
         if (activeId && title) reconcileTitleToIdColor(title, activeId, color);
       } else if (title && isPlaceholderTitle(title)) {
@@ -747,7 +765,7 @@
       }
       const selected = label.getAttribute("data-selected") === "true";
       let color = null;
-      if (selected && lastPaneColor) {
+      if (selected && lastPaneColor && paneSelectionOk) {
         color = lastPaneColor;
         if (activeId && title) reconcileTitleToIdColor(title, activeId, color);
       } else if (title && isPlaceholderTitle(title)) {
@@ -879,7 +897,7 @@
 
     let color = null;
     if (id && tabTitle) color = claimPair(id, tabTitle);
-    else if (id && sidebarTitle && tabTitle && titlesMatch(sidebarTitle, tabTitle)) {
+    else if (id && sidebarTitle && selectionAgreesWithPane(sidebarTitle, tabTitle)) {
       color = claimPair(id, sidebarTitle);
     } else if (id) color = colorForChat({ id });
     else if (tabTitle) color = colorForChat({ title: tabTitle });

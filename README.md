@@ -1,6 +1,6 @@
 # Cursor Chat Colors
 
-Give every Cursor Agent chat its own color so you can switch tabs by color at a glance — sidebar, top tabs, and a left accent line on the conversation stay in sync.
+Every Agent chat gets its own color — sidebar, top tabs, and a left accent on the conversation stay in sync so you can switch by color, not by title.
 
 This is a **hack**: it injects CSS/JS into Cursor’s `workbench.html`. It can break after Cursor updates. Use at your own risk.
 
@@ -13,7 +13,7 @@ chmod +x cursor-chat-colors
 ./cursor-chat-colors on
 ```
 
-Then **fully quit Cursor (`Cmd+Q`)** and reopen.
+Then **fully quit Cursor (`Cmd+Q`)** and reopen. Reload Window is not enough.
 
 Optional — put it on your PATH:
 
@@ -24,39 +24,20 @@ ln -sfn "$(pwd)/cursor-chat-colors" /usr/local/bin/cursor-chat-colors
 ## Usage
 
 ```bash
-cursor-chat-colors on         # enable
-cursor-chat-colors off        # disable
+cursor-chat-colors on         # enable / re-inject
 cursor-chat-colors status      # is it on?
 cursor-chat-colors reinstall  # after editing css/js
 ```
 
-Aliases: `enable`/`disable`/`reload`.
-
-After `on` / `off` / `reinstall`: **Cmd+Q** and reopen. Reload Window is not enough.
+After `on` or `reinstall`: **Cmd+Q** and reopen.
 
 ## How colors work
 
 - **New chat** → random dark tint (a little hue, not gray; avoids hues already on open/recent chats)
 - **Same chat forever** → locked to that composer id in `localStorage`
-- **Tab + left conversation line** → always the same color, including after renames
+- **Tabs, sidebar, and left accent** → always the same color, including after renames and in split panes
 
 That’s the whole point: scan the tab bar by color, not by title.
-
-## Manual color overrides
-
-Edit `chat-colors.js`:
-
-```js
-const OVERRIDES = {
-  "My chat title": "#36ADA3",
-};
-```
-
-Then:
-
-```bash
-./cursor-chat-colors reinstall
-```
 
 ## After a Cursor update
 
@@ -65,6 +46,8 @@ If colors disappear or Cursor complains about a corrupt installation:
 ```bash
 ./cursor-chat-colors on
 ```
+
+Then quit and reopen.
 
 ## How it works
 
