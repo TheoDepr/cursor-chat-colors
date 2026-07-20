@@ -1,0 +1,259 @@
+#!/usr/bin/env bash
+# cursor-chat-colors — easy on/off CLI for Cursor per-chat colors
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+APP="${CURSOR_APP:-/Applications/Cursor.app/Contents/Resources/app}"
+HTML="$APP/out/vs/code/electron-sandbox/workbench/workbench.html"
+PRODUCT="$APP/product.json"
+PRODUCT_BAK="$APP/product.json.bak-chat-colors"
+CSS="$ROOT/chat-colors.css"
+JS="$ROOT/chat-colors.js"
+MARKER_START="<!-- !! VSCODE-CUSTOM-CSS-START !! -->"
+MARKER_END="<!-- !! VSCODE-CUSTOM-CSS-END !! -->"
+MARKER_SESSION="VSCODE-CUSTOM-CSS-SESSION-ID"
+
+usage() {
+  cat <<'EOF'
+cursor-chat-colors — color each Cursor Agent chat
+
+Usage:
+  cursor-chat-colors on        Enable (inject into Cursor)
+  cursor-chat-colors off       Disable (restore Cursor)
+  cursor-chat-colors status    Show whether it's enabled
+  cursor-chat-colors reinstall Re-inject after editing css/js
+  cursor-chat-colors help      Show this help
+
+Aliases: enable→on, disable→off, reload→reinstall
+
+After on/off/reinstall: fully quit Cursor (Cmd+Q) and reopen.
+Reload Window is not enough.
+
+Env:
+  CURSOR_APP  Override Cursor Resources/app path
+EOF
+}
+
+need_files() {
+  if [[ ! -f "$HTML" ]]; then
+    echo "error: Cursor workbench.html not found at:" >&2
+    echo "  $HTML" >&2
+    echo "Set CURSOR_APP if Cursor is installed elsewhere." >&2
+    exit 1
+  fi
+  if [[ ! -f "$CSS" || ! -f "$JS" ]]; then
+    echo "error: missing chat-colors.css or chat-colors.js next to this script." >&2
+    exit 1
+  fi
+  if [[ ! -f "$PRODUCT" ]]; then
+    echo "error: product.json not found at: $PRODUCT" >&2
+    exit 1
+  fi
+}
+
+is_enabled() {
+  grep -q "$MARKER_START" "$HTML" 2>/dev/null
+}
+
+link_config() {
+  mkdir -p "$HOME/.config/cursor"
+  ln -sfn "$ROOT/chat-colors.css" "$HOME/.config/cursor/chat-colors.css"
+  ln -sfn "$ROOT/chat-colors.js" "$HOME/.config/cursor/chat-colors.js"
+  ln -sfn "$ROOT/cursor-chat-colors" "$HOME/.config/cursor/cursor-chat-colors"
+  # Back-compat for older docs / muscle memory
+  ln -sfn "$ROOT/cursor-chat-colors" "$HOME/.config/cursor/enable-chat-colors.sh"
+}
+
+cmd_status() {
+  need_files
+  if is_enabled; then
+    local session
+    session="$(grep -oE "$MARKER_SESSION [0-9a-f-]+" "$HTML" | head -1 | awk '{print $2}')"
+    echo "status: on"
+    echo "workbench: $HTML"
+    [[ -n "$session" ]] && echo "session: $session"
+  else
+    echo "status: off"
+    echo "workbench: $HTML"
+  fi
+}
+
+cmd_on() {
+  need_files
+  if [[ ! -w "$HTML" || ! -w "$PRODUCT" ]]; then
+    echo "error: no write access to Cursor app files." >&2
+    echo "Try: sudo \"$ROOT/cursor-chat-colors\" on" >&2
+    exit 1
+  fi
+
+  python3 - "$HTML" "$CSS" "$JS" "$PRODUCT" <<'PY'
+import sys, uuid, re, json, hashlib, base64, pathlib, shutil
+
+html_path = pathlib.Path(sys.argv[1])
+css_path = pathlib.Path(sys.argv[2])
+js_path = pathlib.Path(sys.argv[3])
+product_path = pathlib.Path(sys.argv[4])
+
+html = html_path.read_text()
+
+# Prefer a clean backup if we have one
+backups = sorted(html_path.parent.glob("workbench.*.bak-custom-css"))
+if backups:
+    for b in reversed(backups):
+        raw = b.read_text()
+        if "VSCODE-CUSTOM-CSS" not in raw and "Content-Security-Policy" in raw:
+            html = raw
+            break
+
+# Strip any previous injection
+html = re.sub(
+    r"<!-- !! VSCODE-CUSTOM-CSS-START !! -->[\s\S]*?<!-- !! VSCODE-CUSTOM-CSS-END !! -->\n*",
+    "",
+    html,
+)
+html = re.sub(r"<!-- !! VSCODE-CUSTOM-CSS-SESSION-ID [\w-]+ !! -->\n*", "", html)
+
+session = str(uuid.uuid4())
+backup = html_path.with_name(f"workbench.{session}.bak-custom-css")
+if not backup.exists():
+    backup.write_text(html)
+
+# Inline scripts need CSP relaxed (same approach as Custom CSS Loader)
+html = re.sub(r'<meta\s+http-equiv="Content-Security-Policy"[\s\S]*?/>', "", html)
+
+css = css_path.read_text()
+js = js_path.read_text()
+inject = (
+    f"<!-- !! VSCODE-CUSTOM-CSS-SESSION-ID {session} !! -->\n"
+    "<!-- !! VSCODE-CUSTOM-CSS-START !! -->\n"
+    f"<style>{css}</style>\n"
+    f"<script>{js}</script>\n"
+    "<!-- !! VSCODE-CUSTOM-CSS-END !! -->\n"
+)
+if "</html>" not in html:
+    raise SystemExit("error: workbench.html missing </html>")
+html = html.replace("</html>", inject + "</html>")
+html_path.write_text(html)
+
+product_bak = product_path.with_suffix(".json.bak-chat-colors")
+if not product_bak.exists():
+    shutil.copy2(product_path, product_bak)
+product = json.loads(product_path.read_text())
+key = "vs/code/electron-sandbox/workbench/workbench.html"
+new = base64.b64encode(hashlib.sha256(html_path.read_bytes()).digest()).decode().rstrip("=")
+product.setdefault("checksums", {})[key] = new
+product_path.write_text(json.dumps(product, indent="\t") + "\n")
+print("enabled")
+print(f"session: {session}")
+print(f"checksum: {new}")
+PY
+
+  link_config
+  echo
+  echo "Fully quit Cursor (Cmd+Q) and reopen."
+}
+
+cmd_off() {
+  need_files
+  if [[ ! -w "$HTML" || ! -w "$PRODUCT" ]]; then
+    echo "error: no write access to Cursor app files." >&2
+    echo "Try: sudo \"$ROOT/cursor-chat-colors\" off" >&2
+    exit 1
+  fi
+
+  if ! is_enabled && [[ ! -f "$PRODUCT_BAK" ]]; then
+    echo "status: already off"
+    exit 0
+  fi
+
+  python3 - "$HTML" "$PRODUCT" "$PRODUCT_BAK" <<'PY'
+import sys, re, json, hashlib, base64, pathlib, shutil
+
+html_path = pathlib.Path(sys.argv[1])
+product_path = pathlib.Path(sys.argv[2])
+product_bak = pathlib.Path(sys.argv[3])
+
+html = html_path.read_text()
+restored = False
+
+# Prefer oldest/clean bak without injection markers
+backups = sorted(html_path.parent.glob("workbench.*.bak-custom-css"))
+for b in backups:
+    raw = b.read_text()
+    if "VSCODE-CUSTOM-CSS" not in raw and "Content-Security-Policy" in raw:
+        html_path.write_text(raw)
+        restored = True
+        print(f"restored workbench from: {b.name}")
+        break
+
+if not restored:
+    # Strip injection in place and hope CSP is intact from a bak we couldn't find
+    cleaned = re.sub(
+        r"<!-- !! VSCODE-CUSTOM-CSS-START !! -->[\s\S]*?<!-- !! VSCODE-CUSTOM-CSS-END !! -->\n*",
+        "",
+        html,
+    )
+    cleaned = re.sub(r"<!-- !! VSCODE-CUSTOM-CSS-SESSION-ID [\w-]+ !! -->\n*", "", cleaned)
+    if cleaned != html:
+        html_path.write_text(cleaned)
+        print("stripped injection from workbench.html")
+        restored = True
+    else:
+        print("workbench.html already clean")
+
+if product_bak.exists():
+    shutil.copy2(product_bak, product_path)
+    print(f"restored product.json from backup")
+else:
+    # Recompute checksum for current html so Cursor stays quiet
+    product = json.loads(product_path.read_text())
+    key = "vs/code/electron-sandbox/workbench/workbench.html"
+    new = base64.b64encode(hashlib.sha256(html_path.read_bytes()).digest()).decode().rstrip("=")
+    product.setdefault("checksums", {})[key] = new
+    product_path.write_text(json.dumps(product, indent="\t") + "\n")
+    print("updated product.json checksum (no backup found)")
+
+print("disabled")
+PY
+
+  echo
+  echo "Fully quit Cursor (Cmd+Q) and reopen."
+}
+
+main() {
+  local cmd="${1:-help}"
+  case "$cmd" in
+    on|enable) cmd_on ;;
+    off|disable) cmd_off ;;
+    status) cmd_status ;;
+    reinstall|reload)
+      # Force a fresh inject even if already on
+      need_files
+      if is_enabled; then
+        # Strip first so on() starts from a clean bak when possible
+        python3 - "$HTML" <<'PY'
+import sys, re, pathlib
+p = pathlib.Path(sys.argv[1])
+html = p.read_text()
+html = re.sub(
+    r"<!-- !! VSCODE-CUSTOM-CSS-START !! -->[\s\S]*?<!-- !! VSCODE-CUSTOM-CSS-END !! -->\n*",
+    "",
+    html,
+)
+html = re.sub(r"<!-- !! VSCODE-CUSTOM-CSS-SESSION-ID [\w-]+ !! -->\n*", "", html)
+p.write_text(html)
+PY
+      fi
+      cmd_on
+      ;;
+    help|-h|--help) usage ;;
+    *)
+      echo "Unknown command: $cmd" >&2
+      echo >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

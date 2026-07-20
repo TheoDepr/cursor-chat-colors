@@ -2,76 +2,91 @@
 
 :root {
   --chat-active-accent: transparent;
-  --chat-active-tint: transparent;
+  --chat-active-line: transparent;
 }
 
-.part.auxiliarybar,
-.agent-panel,
+/* Lift dark accents so washes stay visible on Cursor's dark chrome */
+@supports (color: color-mix(in srgb, red, white)) {
+  :root {
+    --chat-accent-wash: color-mix(in srgb, var(--chat-accent) 58%, white);
+    --chat-active-wash: color-mix(in srgb, var(--chat-active-accent) 58%, white);
+  }
+}
+
+/* Conversation: bright accent line on the left border.
+   Prefer per-pane --chat-pane-line so split chats keep independent colors. */
 .composer-bar.editor,
-.composer-messages-container,
 .glass-agent-conversation-tiling__tile,
-.glass-agent-conversation-tiling {
-  background-color: var(--chat-active-tint) !important;
+.glass-agent-conversation-tiling,
+.agent-panel .glass-agent-conversation-tiling .ui-tiling-panel {
+  position: relative;
 }
 
-.composer-bar.editor {
-  --composer-pane-background: var(--chat-active-tint) !important;
+.composer-bar.editor::before,
+.glass-agent-conversation-tiling__tile::before,
+.glass-agent-conversation-tiling::before,
+.agent-panel .glass-agent-conversation-tiling .ui-tiling-panel::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  background: var(--chat-pane-line, var(--chat-active-line, transparent));
+  border-radius: 0;
+  pointer-events: none;
+  z-index: 20;
 }
 
-/* Classic agent sidebar rows */
-.agent-sidebar-cell {
-  border-left: 3px solid var(--chat-accent, transparent) !important;
-  background: color-mix(in srgb, var(--chat-accent, transparent) 14%, transparent) !important;
+/* Each history row — bright accent (same as top tabs) */
+.agent-sidebar-cell[data-chat-colored="true"] {
+  border-left: 3px solid var(--chat-accent) !important;
+  background: color-mix(in srgb, var(--chat-accent) 28%, transparent) !important;
 }
 
-.agent-sidebar-cell[data-selected="true"] {
-  background: color-mix(in srgb, var(--chat-accent, transparent) 28%, transparent) !important;
+.agent-sidebar-cell[data-chat-colored="true"][data-selected="true"] {
+  background: color-mix(in srgb, var(--chat-accent) 44%, transparent) !important;
 }
 
-/* Agents window history labels / rows */
-.compact-agent-history-react-menu-label {
-  border-left: 3px solid var(--chat-accent, transparent) !important;
+.compact-agent-history-react-menu-label[data-chat-colored="true"] {
+  border-left: 3px solid var(--chat-accent) !important;
   padding-left: 6px !important;
-  background: color-mix(in srgb, var(--chat-accent, transparent) 14%, transparent) !important;
+  background: color-mix(in srgb, var(--chat-accent) 28%, transparent) !important;
   border-radius: 4px;
 }
 
-.agent-sidebar-cell[data-chat-colored="true"],
-.compact-agent-history-react-menu-label[data-chat-colored="true"],
-.ui-menu__item[data-chat-colored="true"] {
-  border-left: 3px solid var(--chat-accent, transparent) !important;
+.compact-agent-history-react-menu-label[data-chat-colored="true"][data-selected="true"],
+.ui-menu__item[data-chat-colored="true"][data-selected="true"] {
+  background: color-mix(in srgb, var(--chat-accent) 44%, transparent) !important;
 }
 
-.compact-agent-history-react-menu-label[data-selected="true"] {
-  background: color-mix(in srgb, var(--chat-accent, transparent) 30%, transparent) !important;
+.ui-menu__item[data-chat-colored="true"] {
+  border-left: 3px solid var(--chat-accent) !important;
 }
 
 .agent-tab[data-chat-colored="true"],
 .agent-tabs-container [role="tab"][data-chat-colored="true"] {
-  border-bottom: 2px solid var(--chat-accent, transparent) !important;
-  background: color-mix(in srgb, var(--chat-accent, transparent) 16%, transparent) !important;
+  border-bottom: 2px solid var(--chat-accent) !important;
+  background: color-mix(in srgb, var(--chat-accent) 26%, transparent) !important;
 }
 
-/* Top editor chat tabs — also set by JS with inline !important */
+/* Top editor chat tabs — JS sets --chat-accent to a brighter sibling of the chat hue */
 .monaco-workbench .part.editor > .content .editor-group-container > .title .tabs-container > .tab[data-chat-colored="true"],
 .monaco-workbench .tabs-container > .tab[data-chat-colored="true"] {
   border-left: none !important;
-  background-color: color-mix(in srgb, var(--chat-accent, transparent) 28%, transparent) !important;
-  background: color-mix(in srgb, var(--chat-accent, transparent) 28%, transparent) !important;
+  background-color: color-mix(in srgb, var(--chat-accent, transparent) 40%, transparent) !important;
+  background: color-mix(in srgb, var(--chat-accent, transparent) 40%, transparent) !important;
   box-shadow: inset 0 -2px 0 var(--chat-accent, transparent) !important;
 }
 
 .monaco-workbench .part.editor > .content .editor-group-container > .title .tabs-container > .tab[data-chat-colored="true"].active,
-.monaco-workbench .tabs-container > .tab[data-chat-colored="true"].active {
-  background-color: color-mix(in srgb, var(--chat-accent, transparent) 48%, transparent) !important;
-  background: color-mix(in srgb, var(--chat-accent, transparent) 48%, transparent) !important;
+.monaco-workbench .tabs-container > .tab[data-chat-colored="true"].active,
+.monaco-workbench .tabs-container > .tab[data-chat-active-matched="1"] {
+  background-color: color-mix(in srgb, var(--chat-accent, transparent) 62%, transparent) !important;
+  background: color-mix(in srgb, var(--chat-accent, transparent) 62%, transparent) !important;
+  box-shadow: inset 0 -2px 0 var(--chat-accent, transparent) !important;
 }
 
 .monaco-workbench .tabs-container > .tab[data-chat-colored="true"] .tab-label {
   border-left: none !important;
-}
-
-/* Left Agents sidebar wash for active chat */
-.agent-sidebar {
-  box-shadow: inset 3px 0 0 var(--chat-active-accent, transparent);
 }
