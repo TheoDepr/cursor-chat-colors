@@ -35,7 +35,7 @@ After `on` or `reinstall`: **Cmd+Q** and reopen.
 
 ## How colors work
 
-- **New chat** → random dark tint (a little hue, not gray; avoids hues already on open/recent chats)
+- **New chat** → random dark-to-mid tint (wide hue/chroma; avoids hues already on open/recent chats)
 - **Same chat forever** → locked to that composer id in `localStorage`
 - **Tabs and left accent** → always the same color, including after renames and in split panes
 
