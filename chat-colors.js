@@ -4,6 +4,7 @@
  * New chat → random color. Locked to composer id forever.
  * Top tabs + left sidebar always resolve through the same title→color map.
  * Title bindings are never stolen when selection lags behind a tab switch.
+ * Placeholder titles ("New Agent") never own a color — composer id does.
  */
 (function () {
   if (window.__cursorChatColorsInstalled) return;
@@ -17,7 +18,7 @@
   // byId (composer-id → color) is the only trusted sticky mapping.
   const STORE_KEY = "cursor-chat-colors-v11";
   const LEGACY_KEYS = ["cursor-chat-colors-v10", "cursor-chat-colors-v9", "cursor-chat-colors-v8"];
-  const RECENT_MAX = 4;
+  const RECENT_MAX = 8;
 
   // New chats share these titles until renamed — never sticky-bind color by them
   const PLACEHOLDER_TITLE_RE = /^(new chat|new agent|untitled|agent|chat)$/i;
@@ -108,7 +109,7 @@
     return used;
   }
 
-  /** Dark accent with a little hue — not gray, not neon. */
+  /** Dark-to-mid accent with clear hue — not gray, not neon. */
   function hslToHex(h, s, l) {
     s /= 100;
     l /= 100;
@@ -180,10 +181,10 @@
     const avoid = [...usedColors(), ...(store.recent || [])];
     let best = null;
     let bestScore = -1;
-    for (let i = 0; i < 14; i++) {
+    for (let i = 0; i < 24; i++) {
       const h = Math.floor(Math.random() * 360);
-      const s = 26 + Math.floor(Math.random() * 20); // 26–45% — a little color
-      const l = 16 + Math.floor(Math.random() * 14); // 16–29% — dark by default
+      const s = 32 + Math.floor(Math.random() * 48); // 32–79% — wider chroma
+      const l = 14 + Math.floor(Math.random() * 28); // 14–41% — dark to mid
       const color = hslToHex(h, s, l);
       const score = avoid.length ? minHueDistance(h, avoid) : 180;
       if (score > bestScore) {
@@ -561,15 +562,24 @@
    * Trusted claim: this title and composer id definitely belong together
    * (active editor tab, or sidebar selection that agrees with the pane).
    * Composer id is the source of truth — title never overrides it.
-   * @param {{ forceTitle?: boolean }} [opts] forceTitle: active tab may steal title ownership
+   * @param {{ forceTitle?: boolean, preferColor?: string }} [opts]
+   *   forceTitle: active tab may steal title ownership
+   *   preferColor: keep an already-painted hue when locking a fresh id (e.g. "New Agent")
    */
   function claimPair(id, title, opts) {
     if (!id) return colorForChat({ title });
     const t = normalizeTitle(title);
     const forceTitle = !!(opts && opts.forceTitle);
+    const preferColor = opts && opts.preferColor;
+    // Same chat only — never inherit the previous pane's hue onto a new composer id.
+    const samePane = !lastPaneId || lastPaneId === id;
     // Id wins. Never let a stale byTitle hue override byId.
     let color = lookupColor({ id });
     if (!color && t && !isPlaceholderTitle(t)) color = lookupColor({ title: t });
+    // New chats may paint under "New Agent" before byId exists — keep THAT hue on the id.
+    // Do not reuse sticky/lastPaneColor from a different chat (tab DOM reuse / lag).
+    if (!color && preferColor && samePane) color = preferColor;
+    if (!color && lastPaneColor && samePane) color = lastPaneColor;
     if (!color) {
       color = pickRandomColor();
       rememberRecent(color);
@@ -670,12 +680,21 @@
     const selectedSidebarTitle = getSelectedSidebarTitle();
     const paneSelectionOk = selectionAgreesWithPane(selectedSidebarTitle, activeTabTitle);
 
-    // Active editor tab + composer id is ground truth (may steal stale title ownership)
+    // Active editor tab + composer id is ground truth (may steal stale title ownership).
+    // Prefer the color already painted on the active tab so "New Agent" → real title
+    // does not reshuffle when the id binding catches up.
+    const focusedActiveTabEarly = getFocusedActiveTab();
+    const paintedBeforeClaim = focusedActiveTabEarly && sticky.get(focusedActiveTabEarly);
     if (activeId && activeTabTitle) {
-      lastPaneColor = claimPair(activeId, activeTabTitle, { forceTitle: true });
+      lastPaneColor = claimPair(activeId, activeTabTitle, {
+        forceTitle: true,
+        preferColor: paintedBeforeClaim || undefined,
+      });
       lastPaneId = activeId;
     } else if (activeId && selectedSidebarTitle && paneSelectionOk) {
-      lastPaneColor = claimPair(activeId, selectedSidebarTitle);
+      lastPaneColor = claimPair(activeId, selectedSidebarTitle, {
+        preferColor: paintedBeforeClaim || undefined,
+      });
       lastPaneId = activeId;
     } else if (activeId) {
       lastPaneColor = colorForChat({ id: activeId });
@@ -768,21 +787,29 @@
       remember(selectedSidebarTitle, lastPaneColor, true);
     }
 
-    // 2) Paint tabs from the map (same source as sidebar)
+    // 2) Paint tabs from the map (same source as sidebar).
+    // Composer id / lastPaneColor wins over placeholder titles — "New Agent" must
+    // not roll a free-floating hue that flips when the generated title arrives.
     for (const tab of tabs) {
       const title = titleFromTopTab(tab);
       let color = null;
-      if (title && isPlaceholderTitle(title)) {
+      if (isFocusedActiveTab(tab) && lastPaneColor) {
+        color = lastPaneColor;
+        if (title && !isPlaceholderTitle(title)) remember(title, color, true);
+      } else if (title && isPlaceholderTitle(title)) {
         color = sticky.get(tab);
         if (!color) {
           color = pickRandomColor();
           rememberRecent(color);
         }
-      } else if (isFocusedActiveTab(tab) && lastPaneColor) {
-        color = lastPaneColor;
-        if (title) remember(title, color, true);
       } else if (title) {
-        color = mapColor(title) || colorForTitle(title) || sticky.get(tab);
+        // Prefer sticky over inventing a byTitle hue — covers placeholder→real rename
+        // on a background tab before its composer id is claimed again.
+        color = mapColor(title) || sticky.get(tab) || colorForTitle(title);
+        if (color && sticky.get(tab) === color && !mapColor(title)) {
+          assignTitleColor(title, color);
+          remember(title, color, false);
+        }
       } else {
         color = sticky.get(tab);
       }
@@ -813,15 +840,15 @@
         textOf(cell.querySelector(".agent-sidebar-cell-text"));
       const selected = cell.getAttribute("data-selected") === "true";
       let color = null;
-      if (title && isPlaceholderTitle(title)) {
+      if (selected && activePaintedColor) {
+        color = activePaintedColor;
+        if (title && !isPlaceholderTitle(title)) remember(title, color, true);
+      } else if (title && isPlaceholderTitle(title)) {
         color = sticky.get(cell);
         if (!color) {
           color = pickRandomColor();
           rememberRecent(color);
         }
-      } else if (selected && activePaintedColor) {
-        color = activePaintedColor;
-        if (title) remember(title, color, true);
       } else if (title) {
         color = mapColor(title) || colorForTitle(title);
       }
@@ -839,15 +866,15 @@
       }
       const selected = label.getAttribute("data-selected") === "true";
       let color = null;
-      if (title && isPlaceholderTitle(title)) {
+      if (selected && activePaintedColor) {
+        color = activePaintedColor;
+        if (title && !isPlaceholderTitle(title)) remember(title, color, true);
+      } else if (title && isPlaceholderTitle(title)) {
         color = sticky.get(label);
         if (!color) {
           color = pickRandomColor();
           rememberRecent(color);
         }
-      } else if (selected && activePaintedColor) {
-        color = activePaintedColor;
-        if (title) remember(title, color, true);
       } else if (title) {
         color = mapColor(title) || colorForTitle(title);
       }
@@ -869,17 +896,21 @@
         const selected =
           tab.getAttribute("aria-selected") === "true" || tab.classList.contains("active");
         let color = null;
-        if (title && isPlaceholderTitle(title)) {
+        if (selected && lastPaneColor && isFocusedActiveTab(tab)) {
+          color = lastPaneColor;
+          if (title && !isPlaceholderTitle(title)) remember(title, color, true);
+        } else if (title && isPlaceholderTitle(title)) {
           color = sticky.get(tab);
           if (!color) {
             color = pickRandomColor();
             rememberRecent(color);
           }
-        } else if (selected && lastPaneColor && isFocusedActiveTab(tab)) {
-          color = lastPaneColor;
-          if (title) remember(title, color, true);
         } else if (title) {
-          color = mapColor(title) || colorForTitle(title) || sticky.get(tab);
+          color = mapColor(title) || sticky.get(tab) || colorForTitle(title);
+          if (color && sticky.get(tab) === color && !mapColor(title)) {
+            assignTitleColor(title, color);
+            remember(title, color, false);
+          }
         } else {
           color = sticky.get(tab);
         }
@@ -969,12 +1000,26 @@
     const id = activeComposerId();
     const tabTitle = getActiveTabTitle();
 
+    const focusedTab = getFocusedActiveTab();
+    const paintedHue = focusedTab && sticky.get(focusedTab);
+
     let color = null;
-    if (id && tabTitle) color = claimPair(id, tabTitle, { forceTitle: true });
-    else if (id && sidebarTitle && selectionAgreesWithPane(sidebarTitle, tabTitle)) {
-      color = claimPair(id, sidebarTitle);
+    if (id && tabTitle) {
+      color = claimPair(id, tabTitle, { forceTitle: true, preferColor: paintedHue || undefined });
+    } else if (id && sidebarTitle && selectionAgreesWithPane(sidebarTitle, tabTitle)) {
+      color = claimPair(id, sidebarTitle, { preferColor: paintedHue || undefined });
     } else if (id) color = colorForChat({ id });
-    else if (tabTitle) color = colorForChat({ title: tabTitle });
+    else if (tabTitle && !isPlaceholderTitle(tabTitle)) color = colorForChat({ title: tabTitle });
+    else if (paintedHue) color = paintedHue;
+    else if (tabTitle) {
+      // Placeholder with no composer id yet — keep sticky or roll once and stick it
+      color = paintedHue;
+      if (!color) {
+        color = pickRandomColor();
+        rememberRecent(color);
+        if (focusedTab) sticky.set(focusedTab, color);
+      }
+    }
 
     lastPaneColor = color;
     lastPaneId = id;
